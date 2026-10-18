@@ -5,8 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="theme-color" content="#060913">
   <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="FocusGoals">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
+  <link rel="apple-touch-icon" sizes="192x192" href="icon-192.png">
+  <link rel="apple-touch-icon" sizes="512x512" href="icon-512.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
   <title>FocusGoals • Мобильный трекер целей & рутин</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -2650,6 +2656,81 @@
       box-shadow: 0 0 18px rgba(6, 182, 212, 0.55);
     }
 
+    .mobile-action-btn.active {
+      color: var(--cyan-neon);
+      border-color: rgba(6, 182, 212, 0.65);
+      background: rgba(6, 182, 212, 0.22);
+      box-shadow: 0 0 14px rgba(6, 182, 212, 0.45);
+    }
+
+    /* PWA iOS Push Notification Banner */
+    .pwa-notif-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 16px;
+      margin-bottom: 12px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, rgba(6, 182, 212, 0.2), rgba(99, 102, 241, 0.15));
+      border: 1px solid rgba(6, 182, 212, 0.45);
+      backdrop-filter: var(--glass-blur);
+      -webkit-backdrop-filter: var(--glass-blur);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+      animation: bannerSlideDown 0.3s ease;
+    }
+    @keyframes bannerSlideDown {
+      from { transform: translateY(-10px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+    .pwa-notif-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex: 1;
+      min-width: 0;
+    }
+    .pwa-notif-icon {
+      font-size: 24px;
+      flex-shrink: 0;
+    }
+    .pwa-notif-text {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+    .pwa-notif-title {
+      font-size: 13.5px;
+      font-weight: 700;
+      color: #ffffff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .pwa-notif-desc {
+      font-size: 11px;
+      color: var(--text-tertiary);
+      line-height: 1.3;
+    }
+    .btn-pwa-enable {
+      padding: 7px 15px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #06b6d4, #0284c7);
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      color: #ffffff;
+      font-family: var(--font-main);
+      font-size: 12.5px;
+      font-weight: 700;
+      cursor: pointer;
+      flex-shrink: 0;
+      box-shadow: 0 0 14px rgba(6, 182, 212, 0.45);
+      transition: var(--transition-smooth);
+    }
+    .btn-pwa-enable:active {
+      transform: scale(0.96);
+    }
+
     /* Mobile Bottom Navigation Bar (Tab Bar) */
     .mobile-bottom-nav {
       display: none;
@@ -3299,6 +3380,9 @@
           </div>
         </div>
         <div class="mobile-top-actions">
+          <button class="mobile-action-btn" id="mobileNotifBtn" title="Push-уведомления на iPhone" aria-label="Уведомления">
+            <span>🔔</span>
+          </button>
           <button class="mobile-action-btn" id="mobileSearchBtn" title="Поиск целей" aria-label="Поиск">
             <span>🔍</span>
           </button>
@@ -3307,6 +3391,9 @@
           </button>
         </div>
       </header>
+
+      <!-- PWA iOS Push Notification Banner -->
+      <div id="pwaNotifBanner" class="pwa-notif-banner" style="display: none;"></div>
 
       <!-- Compact Glass Stats Panel with 6 Cards -->
       <section class="stats-bar glass-panel">
@@ -5884,28 +5971,220 @@
       });
 
       // -------------------------------------------------------------
-      // ROUTINE SMART NOTIFICATION & REMINDER SYSTEM
+      // SERVICE WORKER & iOS PWA PUSH NOTIFICATION SYSTEM
       // -------------------------------------------------------------
-      // Request browser notification permission if available
-      if ('Notification' in window && Notification.permission === 'default') {
-        Notification.requestPermission();
+      let swRegistration = null;
+
+      // Register Service Worker for PWA & iOS push support
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('./sw.js').then((reg) => {
+          swRegistration = reg;
+          console.log('FocusGoals SW registered successfully:', reg.scope);
+        }).catch((err) => {
+          console.warn('FocusGoals SW registration failed:', err);
+        });
+      }
+
+      // Audio notification chime for mobile / desktop
+      function playChime() {
+        try {
+          const AudioCtx = window.AudioContext || window.webkitAudioContext;
+          if (!AudioCtx) return;
+          const ctx = new AudioCtx();
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(880, ctx.currentTime);
+          osc.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.12);
+          gain.gain.setValueAtTime(0.3, ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+          osc.start(ctx.currentTime);
+          osc.stop(ctx.currentTime + 0.4);
+        } catch(e) {}
       }
 
       const sentReminderKeys = new Set();
 
       // ═══════════════════════════════════════════════════════
-      // SMART NOTIFICATION CASCADE ENGINE
+      // SMART NOTIFICATION CASCADE ENGINE (SERVICE WORKER + PWA)
       // Handles: Goals, Routines (mandatory-day cascade), Challenges
       // ═══════════════════════════════════════════════════════
 
-      function sendNotification(key, title, body, icon) {
+      async function sendNotification(key, title, body, icon) {
         if (sentReminderKeys.has(key)) return false;
         sentReminderKeys.add(key);
         showInAppToast(title, body, icon);
+        playChime();
+
+        // Native Push Notification (iOS 16.4+ PWA / Android / Desktop)
         if ('Notification' in window && Notification.permission === 'granted') {
-          new Notification(title, { body, icon: '🎯', tag: key });
+          try {
+            // Priority 1: Service Worker registration (Official iOS PWA standard)
+            if (swRegistration && 'showNotification' in swRegistration) {
+              await swRegistration.showNotification(title, {
+                body: body,
+                icon: 'icon-192.png',
+                badge: 'icon-192.png',
+                tag: key,
+                renotify: true,
+                vibrate: [200, 100, 200],
+                data: { url: window.location.href }
+              });
+              return true;
+            }
+
+            // Priority 2: Service Worker ready check
+            if ('serviceWorker' in navigator) {
+              const readyReg = await navigator.serviceWorker.ready;
+              if (readyReg && 'showNotification' in readyReg) {
+                await readyReg.showNotification(title, {
+                  body: body,
+                  icon: 'icon-192.png',
+                  badge: 'icon-192.png',
+                  tag: key,
+                  renotify: true,
+                  vibrate: [200, 100, 200]
+                });
+                return true;
+              }
+            }
+
+            // Priority 3: Standard browser notification
+            new Notification(title, { body: body, icon: 'icon-192.png', tag: key });
+          } catch (err) {
+            console.warn('Native notification dispatch error:', err);
+            try {
+              new Notification(title, { body: body, icon: 'icon-192.png', tag: key });
+            } catch (fallbackErr) {}
+          }
         }
         return true;
+      }
+
+      // iOS / Mobile User-Gesture Permission Requester
+      async function requestNotificationPermission() {
+        if (!('Notification' in window)) {
+          showInAppToast(
+            'Уведомления не поддерживаются в этом режиме',
+            'На iPhone push-уведомления работают, когда сайт добавлен на экран «Домой» (Поделиться ➔ На экран Домой).',
+            '⚠️'
+          );
+          return false;
+        }
+
+        if ('serviceWorker' in navigator) {
+          try {
+            swRegistration = await navigator.serviceWorker.ready;
+          } catch(e) {}
+        }
+
+        try {
+          const perm = await Notification.requestPermission();
+          updatePwaNotifUI();
+
+          if (perm === 'granted') {
+            sendNotification(
+              'push_welcome_' + Date.now(),
+              '🎉 Push-уведомления подключены!',
+              'FocusGoals теперь может присылать напоминания прямо на ваш экран!',
+              '🔔'
+            );
+            return true;
+          } else if (perm === 'denied') {
+            showInAppToast(
+              'Уведомления заблокированы',
+              'Чтобы включить: Настройки iPhone ➔ FocusGoals ➔ Уведомления ➔ Вкл.',
+              '⚠️'
+            );
+          }
+        } catch (e) {
+          console.error('Error requesting notification permission:', e);
+        }
+        return false;
+      }
+
+      function updatePwaNotifUI() {
+        const banner = document.getElementById('pwaNotifBanner');
+        const notifBtn = document.getElementById('mobileNotifBtn');
+
+        if (!('Notification' in window)) {
+          const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+          const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+          if (isIOS && !isStandalone && banner) {
+            banner.style.display = 'flex';
+            banner.innerHTML = `
+              <div class="pwa-notif-left">
+                <span class="pwa-notif-icon">📲</span>
+                <div class="pwa-notif-text">
+                  <div class="pwa-notif-title">Установите на экран iPhone</div>
+                  <div class="pwa-notif-desc">Нажмите «Поделиться» ➔ «На экран Домой» для работы push-уведомлений</div>
+                </div>
+              </div>
+            `;
+          } else if (banner) {
+            banner.style.display = 'none';
+          }
+          return;
+        }
+
+        if (Notification.permission === 'granted') {
+          if (notifBtn) {
+            notifBtn.classList.add('active');
+            notifBtn.title = 'Push-уведомления активны (Нажмите для теста)';
+          }
+          if (banner) banner.style.display = 'none';
+        } else if (Notification.permission === 'denied') {
+          if (notifBtn) notifBtn.classList.remove('active');
+          if (banner) {
+            banner.style.display = 'flex';
+            banner.innerHTML = `
+              <div class="pwa-notif-left">
+                <span class="pwa-notif-icon">⚠️</span>
+                <div class="pwa-notif-text">
+                  <div class="pwa-notif-title">Уведомления отключены в системе</div>
+                  <div class="pwa-notif-desc">Включите в Настройки ➔ FocusGoals ➔ Уведомления</div>
+                </div>
+              </div>
+            `;
+          }
+        } else {
+          // default
+          if (notifBtn) notifBtn.classList.remove('active');
+          if (banner) {
+            banner.style.display = 'flex';
+            banner.innerHTML = `
+              <div class="pwa-notif-left">
+                <span class="pwa-notif-icon">🔔</span>
+                <div class="pwa-notif-text">
+                  <div class="pwa-notif-title">Включить push-уведомления</div>
+                  <div class="pwa-notif-desc">Напоминания о дедлайнах и рутинах на экране iPhone</div>
+                </div>
+              </div>
+              <button type="button" class="btn-pwa-enable" id="btnEnableNotif">Включить</button>
+            `;
+            const btn = document.getElementById('btnEnableNotif');
+            if (btn) btn.addEventListener('click', requestNotificationPermission);
+          }
+        }
+      }
+
+      // Wire Mobile Notification Button
+      const mobileNotifBtn = document.getElementById('mobileNotifBtn');
+      if (mobileNotifBtn) {
+        mobileNotifBtn.addEventListener('click', () => {
+          if ('Notification' in window && Notification.permission === 'granted') {
+            sendNotification(
+              'manual_test_' + Date.now(),
+              '🔔 Тест push-уведомления!',
+              'Связь с iPhone установлена. Умные каскадные напоминания работают отлично!',
+              '🚀'
+            );
+          } else {
+            requestNotificationPermission();
+          }
+        });
       }
 
       function checkAllSmartNotifications() {
@@ -6151,6 +6430,7 @@
       // Initial Launch
       loadGoals();
       renderGoals();
+      updatePwaNotifUI();
 
     })();
   </script>
