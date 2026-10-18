@@ -3854,6 +3854,35 @@
         if (e.target === confirmModal) closeConfirmDialog();
       });
 
+      function confirmRoutineCheckin(goal) {
+        if (!goal) return;
+        const todayStr = getTodayDateStr();
+        if (!goal.completions) goal.completions = {};
+        const currentDone = goal.completions[todayStr] || 0;
+        const target = goal.timesPerDay || 1;
+        const nextCount = currentDone + 1;
+
+        openConfirmDialog({
+          title: 'Отметить выполнение рутины?',
+          message: `Вы действительно выполнили «${goal.title}»? Будет зафиксировано выполнение: ${nextCount} из ${target} на сегодня.`,
+          icon: '📋',
+          confirmText: 'Да, отметить!',
+          isDanger: false,
+          onConfirm: () => {
+            goal.completions[todayStr] = nextCount;
+            saveGoals();
+            updateStatsAndBadges();
+            renderGoals();
+
+            if (nextCount >= target) {
+              showInAppToast('🎉 Отличная работа!', `Рутина «${goal.title}» полностью выполнена на сегодня (${nextCount}/${target})!`, '🏆');
+            } else {
+              showInAppToast('✅ Зафиксировано!', `Прогресс рутины «${goal.title}»: ${nextCount} из ${target} раз на сегодня`, '✓');
+            }
+          }
+        });
+      }
+
       // ─── FULL TASK DETAILS MODAL (ПОЛНОЦЕННАЯ КАРТОЧКА ЗАДАЧИ) ───────────
       const detailsModal = document.getElementById('detailsModal');
       const closeDetailsModalBtn = document.getElementById('closeDetailsModalBtn');
@@ -4115,12 +4144,7 @@
         if (dtlCheckinBtn) {
           dtlCheckinBtn.addEventListener('click', () => {
             closeDetailsModal();
-            const todayStr = getTodayDateStr();
-            if (!goal.completions) goal.completions = {};
-            goal.completions[todayStr] = (goal.completions[todayStr] || 0) + 1;
-            saveGoals();
-            updateStatsAndBadges();
-            renderGoals();
+            confirmRoutineCheckin(goal);
           });
         }
 
@@ -5662,20 +5686,7 @@
           renderGoals();
           showInAppToast('🔥 Новый стрик начат!', `Испытание «${goal.title}» перезапущено с текущего момента! Вперёд!`, '🚀');
         } else if (action === 'routine-checkin') {
-          const todayStr = getTodayDateStr();
-          if (!goal.completions) goal.completions = {};
-          const currentDone = goal.completions[todayStr] || 0;
-          const target = goal.timesPerDay || 1;
-          const newDone = currentDone + 1;
-          goal.completions[todayStr] = newDone;
-          saveGoals();
-          renderGoals();
-
-          if (newDone >= target) {
-            showInAppToast('🎉 Отличная работа!', `Рутина «${goal.title}» полностью выполнена на сегодня (${newDone}/${target})!`, '🏆');
-          } else {
-            showInAppToast('✅ Зафиксировано!', `Прогресс рутины «${goal.title}»: ${newDone} из ${target} раз на сегодня`, '✓');
-          }
+          confirmRoutineCheckin(goal);
         } else if (action === 'restore') {
           openModalForEdit(goal);
           const tomorrow = new Date();
