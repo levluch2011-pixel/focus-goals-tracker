@@ -4696,6 +4696,9 @@
       function saveGoals() {
         try {
           localStorage.setItem(STORAGE_KEY, JSON.stringify(goals));
+          if (typeof syncGoalsWithServer === 'function') {
+            syncGoalsWithServer();
+          }
         } catch (e) {
           console.error('LocalStorage error', e);
         }
@@ -6074,6 +6077,80 @@
         return true;
       }
 
+      // Helper: Base64 URL to Uint8Array
+      function urlB64ToUint8Array(base64String) {
+        const padding = '='.repeat((4 - base64String.length % 4) % 4);
+        const base64 = (base64String + padding)
+          .replace(/\-/g, '+')
+          .replace(/_/g, '/');
+        const rawData = window.atob(base64);
+        const outputArray = new Uint8Array(rawData.length);
+        for (let i = 0; i < rawData.length; ++i) {
+          outputArray[i] = rawData.charCodeAt(i);
+        }
+        return outputArray;
+      }
+
+      // Web Push Server Subscription (for background push when app is closed)
+      async function subscribeUserToWebPush() {
+        if (!('serviceWorker' in navigator) || !('PushManager' in window)) return null;
+        try {
+          const reg = await navigator.serviceWorker.ready;
+          let sub = await reg.pushManager.getSubscription();
+
+          if (!sub) {
+            const res = await fetch('/api/vapid-public-key');
+            if (!res.ok) throw new Error('VAPID key unavailable');
+            const { publicKey } = await res.json();
+            sub = await reg.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey: urlB64ToUint8Array(publicKey)
+            });
+            console.log('Successfully subscribed to Apple/Web Push:', sub.endpoint);
+          }
+
+          if (sub) {
+            await fetch('/api/subscribe', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                subscription: sub,
+                goals: goals,
+                timezoneOffset: new Date().getTimezoneOffset()
+              })
+            });
+          }
+          return sub;
+        } catch (e) {
+          console.warn('Web Push subscription error:', e);
+          return null;
+        }
+      }
+
+      // Sync active goals & routines with server push background scheduler
+      let syncDebounceTimer = null;
+      function syncGoalsWithServer() {
+        if (syncDebounceTimer) clearTimeout(syncDebounceTimer);
+        syncDebounceTimer = setTimeout(async () => {
+          if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+          try {
+            const reg = await navigator.serviceWorker.ready;
+            const sub = await reg.pushManager.getSubscription();
+            if (!sub) return;
+
+            fetch('/api/sync-reminders', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                endpoint: sub.endpoint,
+                goals: goals,
+                timezoneOffset: new Date().getTimezoneOffset()
+              })
+            }).catch(() => {});
+          } catch(e) {}
+        }, 1200);
+      }
+
       // iOS / Mobile User-Gesture Permission Requester
       async function requestNotificationPermission() {
         if (!('Notification' in window)) {
@@ -6096,12 +6173,26 @@
           updatePwaNotifUI();
 
           if (perm === 'granted') {
-            sendNotification(
-              'push_welcome_' + Date.now(),
-              '🎉 Push-уведомления подключены!',
-              'FocusGoals теперь может присылать напоминания прямо на ваш экран!',
-              '🔔'
-            );
+            const sub = await subscribeUserToWebPush();
+            if (sub) {
+              fetch('/api/test-push', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  endpoint: sub.endpoint,
+                  title: '🎉 Push-уведомления подключены!',
+                  body: 'FocusGoals подключен к серверу Apple APNs! Напоминания будут приходить даже при закрытом приложении.',
+                  delaySeconds: 0
+                })
+              }).catch(() => {});
+            } else {
+              sendNotification(
+                'push_welcome_' + Date.now(),
+                '🎉 Push-уведомления подключены!',
+                'FocusGoals теперь может присылать напоминания прямо на ваш экран!',
+                '🔔'
+              );
+            }
             return true;
           } else if (perm === 'denied') {
             showInAppToast(
@@ -6146,6 +6237,8 @@
             notifBtn.title = 'Push-уведомления активны (Нажмите для теста)';
           }
           if (banner) banner.style.display = 'none';
+          // Ensure background server subscription is active and synced
+          subscribeUserToWebPush();
         } else if (Notification.permission === 'denied') {
           if (notifBtn) notifBtn.classList.remove('active');
           if (banner) {
@@ -6181,17 +6274,47 @@
         }
       }
 
-      // Wire Mobile Notification Button
+      // Wire Mobile Notification Button with Closed App Background Test
       const mobileNotifBtn = document.getElementById('mobileNotifBtn');
       if (mobileNotifBtn) {
-        mobileNotifBtn.addEventListener('click', () => {
+        mobileNotifBtn.addEventListener('click', async () => {
           if ('Notification' in window && Notification.permission === 'granted') {
-            sendNotification(
-              'manual_test_' + Date.now(),
-              '🔔 Тест push-уведомления!',
-              'Связь с iPhone установлена. Умные каскадные напоминания работают отлично!',
-              '🚀'
-            );
+            openConfirmDialog({
+              title: 'Проверить push в фоновом режиме?',
+              message: 'Через 5 секунд сервер Apple APNs отправит вам push-уведомление. Вы можете заблокировать телефон или закрыть приложение прямо сейчас, чтобы проверить получение!',
+              icon: '📲',
+              confirmText: 'Отправить через 5 сек.',
+              isDanger: false,
+              onConfirm: async () => {
+                showInAppToast('⏱️ Таймер запущен (5 сек.)', 'Заблокируйте экран или закройте приложение прямо сейчас!', '📱');
+                try {
+                  const reg = await navigator.serviceWorker.ready;
+                  let sub = await reg.pushManager.getSubscription();
+                  if (!sub) sub = await subscribeUserToWebPush();
+
+                  if (sub) {
+                    fetch('/api/test-push', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        endpoint: sub.endpoint,
+                        title: '🔔 FocusGoals: Фоновый тест!',
+                        body: 'Apple APNs успешно доставил уведомление при закрытом приложении! 🚀',
+                        delaySeconds: 5
+                      })
+                    }).catch(() => {});
+                  } else {
+                    setTimeout(() => {
+                      sendNotification('test_closed_' + Date.now(), '🔔 FocusGoals тест', 'Уведомление отправлено!', '🚀');
+                    }, 5000);
+                  }
+                } catch(e) {
+                  setTimeout(() => {
+                    sendNotification('test_closed_' + Date.now(), '🔔 FocusGoals тест', 'Уведомление отправлено!', '🚀');
+                  }, 5000);
+                }
+              }
+            });
           } else {
             requestNotificationPermission();
           }

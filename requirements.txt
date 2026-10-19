@@ -1,2 +1,8 @@
-customtkinter>=6.0.0
-winotify>=1.1.0
+Flask>=3.0.0
+flask-cors>=4.0.0
+pywebpush>=2.0.0
+py-vapid>=1.9.0
+cryptography>=42.0.0
+gunicorn>=21.0.0
+customtkinter>=6.0.0; sys_platform == 'win32'
+winotify>=1.1.0; sys_platform == 'win32'
